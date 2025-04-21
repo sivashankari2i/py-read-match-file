@@ -1,5 +1,8 @@
-from fastapi import FastAPI, File, UploadFile
+import json
+from typing import Dict
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
+import numpy as np
 import pandas as pd
 from io import BytesIO, StringIO
 from pydantic import BaseModel
@@ -66,6 +69,30 @@ async def upload_excel(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
     
+    
+@app.post("/upload-read-csv/")
+async def upload_excel(file: UploadFile = File(...), meta: str = Form(...)   ):
+    if not file.filename.endswith(".csv"):
+       return JSONResponse(status_code=400, content={"error": "Only CSV files are supported."})
+
+    params = json.loads(meta)
+    contents = await file.read()
+    decoded_contents = contents.decode('utf-8')  # Decode bytes to string
+    csv_file = StringIO(decoded_contents)
+    try:
+        # Read Excel content into pandas DataFrame
+        print("reading decoded_contents")
+        df = pd.read_csv(csv_file, usecols=params.keys())
+        df.rename(columns=params, inplace=True)
+        data = df.to_dict(orient="records")
+        # matched, suggestions, unmatched, unmatchedEntityList, matchedEntityList = match_excel_headers(excel_headers, entity_schema)
+
+ 
+        return data
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+ 
+    
 @app.post("/upload-excel/")
 async def upload_excel(file: UploadFile = File(...)):
     if not file.filename.endswith((".xlsx", ".xls")):
@@ -88,7 +115,46 @@ async def upload_excel(file: UploadFile = File(...)):
                 "matchedEntityList": matchedEntityList}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     
+@app.post("/upload-read-excel/")
+async def upload_excel(file: UploadFile = File(...), meta: str = Form(...)   ):
+    if not file.filename.endswith((".xlsx", ".xls")):
+        return JSONResponse(status_code=400, content={"error": "Invalid file format. Please upload an Excel file."})
+
+    params = json.loads(meta)
+    contents = await file.read()
+    print("reading eleeeeeeeeeeeee")
+    try:
+        # Read Excel content into pandas DataFrame
+        print("reading decoded_contents")
+        df = pd.read_excel(BytesIO(contents), usecols=params.keys())
+        # df = df.replace([np.nan, np.inf, -np.inf], None)
+        print("After read decoded_contents changes")
+        df.rename(columns=params, inplace=True)
+        
+        print("After re formatting contents changes")
+        data = df.to_dict(orient="records")
+        invalid_columns = df.columns[df.isin([np.nan, np.inf, -np.inf]).any()].tolist()
+
+        # Clean data for JSON response
+        df_clean = df.replace([np.nan, np.inf, -np.inf], None)
+
+        # Convert to dict for JSON-safe return
+        data = df_clean.to_dict(orient="records")
+
+        return JSONResponse(content={
+            "data": data,
+            "invalid_columns": invalid_columns
+        })
+        # matched, suggestions, unmatched, unmatchedEntityList, matchedEntityList = match_excel_headers(excel_headers, entity_schema)
+
+ 
+        # return df
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+ 
+
 def match_excel_headers(excel_headers, entity_schema):
     def normalize(s):
         return s.strip().lower().replace(" ", "")

@@ -6,8 +6,7 @@ import numpy as np
 import pandas as pd
 from io import BytesIO, StringIO
 from pydantic import BaseModel
-
-from create_query import generate_multi_table_queries
+from collections import defaultdict
 
 app = FastAPI()
 

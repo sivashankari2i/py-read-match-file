@@ -7,21 +7,33 @@ import pandas as pd
 from io import BytesIO, StringIO
 from pydantic import BaseModel
 
+from create_query import generate_multi_table_queries
+
 app = FastAPI()
 
 entity_schema = {
     "productName": "name of products",
     "parentCategory": "Product's main category",
-    "Subcategory": "Product's most matching category",
+    "subcategory": "Product's most matching category",
     "identifier": "Unique number for products",
-    "Description": "About product details",
-    "qty": "Quantity detail on the product",
-    "MFR.": "Reference number",
-    "Price": {
-        "value": "Original price",
-        "discount": "Min discount",
-        "maxDiscount": "Max discount"
-    }
+    "description": "About product details",
+    "stock": "Quantity detail on the product",
+    "MFR": "Reference number",
+    "discount":  "Max discount of the product",
+    "price":  "Original price"
+}
+
+mapping = {
+    "productName": ("products", "name"),
+    "stock": ("products", "qty"),
+    "description": ("products", "description"),
+    "identifier": ("products", "identifier"),
+    "description": ("products", "description"),
+    "MFR": ("products", "MFR"),
+    "parentCategory": ("categories", "name"),
+    "subcategory": ("categories", "subcategory"),
+    "price": ("pricing", "value"),
+    "discount":("pricing", "discount")
 }
 
 # Define a Pydantic model for the POST request body
@@ -199,3 +211,66 @@ def match_excel_headers(excel_headers, entity_schema):
     # for m in matchedEntityList:
         # unmatchedEntityList.pop(m)
     return matched, suggestions, unmatched, unmatchedEntityList, matchedEntityList
+
+    
+@app.post("/create-query-excel/")
+async def upload_excel(file: UploadFile = File(...), meta: str = Form(...) ):
+    if not file.filename.endswith((".xlsx", ".xls")):
+        return JSONResponse(status_code=400, content={"error": "Invalid file format. Please upload an Excel file."})
+
+    contents = await file.read()
+    print("reading eleeeeeeeeeeeee")
+    try:
+        params = json.loads(meta)
+        # Read Excel content into pandas DataFrame
+        print("reading decoded_contents")
+        df = pd.read_excel(BytesIO(contents), usecols=params.keys())
+        df = df.replace([np.nan, np.inf, -np.inf], None)
+        print("After read decoded_contents changes")
+        df.rename(columns=params, inplace=True)
+        data = df.to_dict(orient="records")
+        print("After re formatting contents changes")
+
+        # Convert to dict for JSON-safe return
+        queries_by_table = generate_multi_table_queries(df, mapping)
+        for table, queries in queries_by_table.items():
+            print(f"\n-- {table.upper()} --")
+            for q, v in queries:
+                print(q)
+                print("Values:", v)
+        # matched, suggestions, unmatched, unmatchedEntityList, matchedEntityList = match_excel_headers(excel_headers, entity_schema)
+
+ 
+        return {"queries_by_table": queries_by_table,
+                "data": data}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+ 
+def generate_multi_table_queries(df, mapping):
+
+    table_queries = defaultdict(list)
+
+    for _, row in df.iterrows():
+        temp_rows = defaultdict(dict)
+
+        for excel_col, target in mapping.items():
+            value = row.get(excel_col)
+            if isinstance(target, tuple) and isinstance(target[1], dict):
+                # Nested fields
+                table, sub_map = target
+                for sub_key, db_field in sub_map.items():
+                    val = value.get(sub_key) if isinstance(value, dict) else None
+                    temp_rows[table][db_field] = val
+            elif isinstance(target, tuple):
+                table, field = target
+                temp_rows[table][field] = value
+
+        # Build queries for each table
+        for table, row_data in temp_rows.items():
+            columns = ", ".join(row_data.keys())
+            placeholders = ", ".join(["%s"] * len(row_data))
+            values = tuple(row_data.values())
+            query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders});"
+            table_queries[table].append((query, values))
+
+    return table_queries
